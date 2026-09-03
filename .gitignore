@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+.ruff_cache/
+
+# Data artifacts
+data/*.db
+data/chroma/
+data/prs/
+data/*.jsonl
+!data/.gitkeep
+
+# OS
+.DS_Store
