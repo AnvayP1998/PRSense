@@ -8,10 +8,16 @@ python-dotenv>=1.0
 PyGithub>=2.5
 httpx>=0.27
 
+# ── Phase 2: MCP layer + RAG (all OSS, no paid services) ──────────────
+mcp>=1.29                 # official Model Context Protocol SDK (MIT)
+chromadb>=1.5             # local vector store, ONNX MiniLM embeddings, offline (Apache-2.0)
+langgraph>=1.2            # agent state machine (MIT)
+langchain-core>=1.6       # tool/message primitives (MIT)
+langchain-mcp-adapters>=0.3  # exposes MCP tools to LangChain/LangGraph (MIT)
+
 # ── Dev / test ────────────────────────────────────────────────────────
 pytest>=8.3
 pytest-asyncio>=0.24
 
-# ── Phases 2-5 dependencies are added as each phase lands ──────────────
-# langgraph, langchain, langchain-google-genai, langchain-groq,
-# mcp, chromadb, supabase, langsmith, streamlit, pandas
+# ── Phases 3-5 dependencies are added as each phase lands ─────────────
+# langchain-google-genai, langchain-groq, langsmith, streamlit, pandas

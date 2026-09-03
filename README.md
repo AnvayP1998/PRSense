@@ -4,7 +4,7 @@ AI-powered GitHub PR review bot. 100% free stack: Gemini/Groq LLMs, LangChain +
 LangGraph, MCP tools, ChromaDB RAG, FastAPI, Streamlit. Built around a rigorous
 evaluation framework that proves each iteration's improvement with metrics.
 
-> Status: **Phase 1 (Foundation) complete.**
+> Status: **Phase 2 (MCP layer + RAG) complete.**
 
 ## Stack (all genuinely free)
 
@@ -21,7 +21,7 @@ evaluation framework that proves each iteration's improvement with metrics.
 | Dashboard | Streamlit | OSS |
 | Hosting | Railway / Render free tier | free |
 
-## Phase 1 — what's here
+## What's here
 
 ```
 prsense/
@@ -29,11 +29,40 @@ prsense/
 │   ├── main.py                 # FastAPI app, /health
 │   ├── core/
 │   │   ├── config.py           # pydantic-settings, .env driven
-│   │   ├── logging.py
+│   │   ├── logging.py          # stderr (keeps MCP stdout stream clean)
 │   │   └── github_client.py    # PyGithub wrapper: diff, files, metadata, comment
-│   └── webhooks/github.py      # POST /webhook/github, HMAC-SHA256 verified
-└── tests/test_webhook.py
+│   ├── webhooks/github.py      # POST /webhook/github, HMAC-SHA256 verified
+│   ├── rag/
+│   │   ├── embeddings.py       # local ONNX MiniLM (default) | Gemini (opt-in)
+│   │   └── retriever.py        # ChromaDB store of historical PRs + labels
+│   ├── mcp/
+│   │   ├── tools.py            # get_pr_diff / get_repo_files / get_similar_prs /
+│   │   │                       #   get_repo_coding_standards  (plain, testable fns)
+│   │   └── server.py           # FastMCP server (stdio) wrapping those tools
+│   └── agents/mcp_bridge.py    # loads MCP tools as LangChain tools for LangGraph
+├── scripts/phase2_demo.py      # seed / query / mcp  — hands-on, no keys
+└── tests/                      # 13 tests (webhook, MCP tools, MCP server round-trip)
 ```
+
+### MCP tools exposed to the LLM
+
+| Tool | Purpose |
+|---|---|
+| `get_pr_diff(pr_id)` | unified diff + per-file summary (`pr_id` = `owner/repo#123`) |
+| `get_repo_files(repo, path, ref?)` | one file's content for extra context |
+| `get_similar_prs(diff_text, n_results?)` | RAG over ChromaDB of historical PRs (with bug/revert labels) |
+| `get_repo_coding_standards(repo, ref?)` | CONTRIBUTING.md, linters, `.editorconfig`, … |
+
+## Phase 2 — try it (no API keys)
+
+```bash
+.venv\Scripts\python scripts\phase2_demo.py seed                       # index demo PRs
+.venv\Scripts\python scripts\phase2_demo.py query "auth token is None" # RAG lookup
+.venv\Scripts\python scripts\phase2_demo.py mcp                        # call tools via MCP
+```
+
+First run downloads the ONNX embedding model once (~79 MB, to `~/.cache/chroma`),
+then everything is offline. ChromaDB telemetry is disabled.
 
 ## Setup
 
@@ -87,7 +116,7 @@ Without ngrok you can still replay a captured payload with `curl` (see tests).
 ## Roadmap
 
 - [x] Phase 1 — Foundation (FastAPI, webhook, GitHub client)
-- [ ] Phase 2 — MCP server + tools, wired into LangGraph agent
+- [x] Phase 2 — MCP server + 4 tools, ChromaDB RAG, LangChain/LangGraph bridge
 - [ ] Phase 3 — LangGraph review state machine + LangSmith tracing
 - [ ] Phase 4 — Evaluation framework (dataset, precision/recall/F1, A/B, regression suite)
 - [ ] Phase 5 — Streamlit dashboard + deployment

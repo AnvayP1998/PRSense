@@ -11,7 +11,9 @@ def setup_logging(level: str = "INFO") -> None:
     global _CONFIGURED
     if _CONFIGURED:
         return
-    handler = logging.StreamHandler(sys.stdout)
+    # stderr, never stdout: the MCP server speaks JSON-RPC over stdout and any
+    # stray log line there corrupts the stream.
+    handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(levelname)-7s %(name)s | %(message)s")
     )
