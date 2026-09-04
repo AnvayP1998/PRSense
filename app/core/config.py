@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     langsmith_api_key: str = ""
     langsmith_project: str = "prsense"
 
+    # Agent
+    auto_post_comments: bool = False  # safety default: never write to real PRs unasked
+
     @property
     def effective_database_url(self) -> str:
         return self.database_url or f"sqlite:///{self.sqlite_path}"

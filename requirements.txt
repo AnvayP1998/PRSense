@@ -15,9 +15,14 @@ langgraph>=1.2            # agent state machine (MIT)
 langchain-core>=1.6       # tool/message primitives (MIT)
 langchain-mcp-adapters>=0.3  # exposes MCP tools to LangChain/LangGraph (MIT)
 
+# ── Phase 3: LangGraph review agent + LLMs + tracing ───────────────────
+langchain-google-genai>=2.1   # Gemini, free tier (MIT)
+langchain-groq>=0.2           # Groq fallback, free tier (MIT)
+langsmith>=0.12                # tracing client, free tier (MIT)
+
 # ── Dev / test ────────────────────────────────────────────────────────
 pytest>=8.3
 pytest-asyncio>=0.24
 
-# ── Phases 3-5 dependencies are added as each phase lands ─────────────
-# langchain-google-genai, langchain-groq, langsmith, streamlit, pandas
+# ── Phases 4-5 dependencies are added as each phase lands ─────────────
+# supabase, streamlit, pandas

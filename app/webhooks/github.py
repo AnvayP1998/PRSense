@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -30,9 +30,25 @@ def _verify_signature(body: bytes, signature_header: str | None) -> bool:
     return hmac.compare_digest(expected, signature_header)
 
 
+def _run_review_background(pr_id: str, dry_run: bool) -> None:
+    from app.agents.graph import run_review  # deferred: keep webhook import light
+
+    try:
+        state = run_review(pr_id, dry_run=dry_run)
+        log.info(
+            "review complete pr=%s model=%s findings=%d posted=%s",
+            pr_id, state.get("model_used"),
+            len(state.get("review", {}).get("findings", [])),
+            state.get("comment_id"),
+        )
+    except Exception:  # noqa: BLE001 - background task; must not raise into the loop
+        log.exception("background review failed for %s", pr_id)
+
+
 @router.post("/github")
 async def github_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_github_event: str = Header(default=""),
     x_hub_signature_256: str | None = Header(default=None),
     x_github_delivery: str = Header(default=""),
@@ -72,6 +88,7 @@ async def github_webhook(
     }
     log.info("queued review: %s#%s (%s)", repo, number, action)
 
-    # Phase 3 wires this into the LangGraph agent (background task / queue).
-    # For Phase 1 we just acknowledge receipt.
-    return {"ok": True, "accepted": event}
+    dry_run = not get_settings().auto_post_comments
+    background_tasks.add_task(_run_review_background, f"{repo}#{number}", dry_run)
+
+    return {"ok": True, "accepted": event, "review_dry_run": dry_run}
