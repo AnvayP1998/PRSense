@@ -17,6 +17,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Windows consoles default to cp1252; the review comment contains emoji.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 from app.agents.graph import run_review
 from app.agents.llm import NoLLMAvailable
 from app.core.config import get_settings
