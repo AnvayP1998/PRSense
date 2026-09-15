@@ -44,24 +44,38 @@ def _groq_structured():
     return llm.with_structured_output(ReviewResult)
 
 
-def review_with_fallback(messages: list) -> tuple[ReviewResult, str]:
-    """Returns (result, model_name_used)."""
+def review_with_fallback(messages: list, *, provider: str = "auto") -> tuple[ReviewResult, str]:
+    """Returns (result, model_name_used).
+
+    provider: "auto" (Gemini then Groq fallback, the production default),
+    "gemini", or "groq" (force one — used by the eval harness's A/B runs to
+    measure each model in isolation, without a silent fallback muddying the
+    comparison).
+    """
     settings = get_settings()
 
-    gemini = _gemini_structured()
-    if gemini is not None:
-        try:
-            return gemini.invoke(messages), f"gemini:{settings.gemini_model}"
-        except Exception as e:  # noqa: BLE001 - deliberately broad: any failure -> fallback
-            log.warning("Gemini call failed (%s); falling back to Groq", e)
+    if provider in ("auto", "gemini"):
+        gemini = _gemini_structured()
+        if gemini is not None:
+            try:
+                return gemini.invoke(messages), f"gemini:{settings.gemini_model}"
+            except Exception as e:  # noqa: BLE001 - deliberately broad: any failure -> fallback
+                log.warning("Gemini call failed (%s)", e)
+                if provider == "gemini":
+                    raise NoLLMAvailable(f"Gemini failed: {e}") from e
+        elif provider == "gemini":
+            raise NoLLMAvailable("GEMINI_API_KEY not set.")
 
-    groq = _groq_structured()
-    if groq is not None:
-        try:
-            return groq.invoke(messages), f"groq:{settings.groq_model}"
-        except Exception as e:  # noqa: BLE001
-            log.error("Groq fallback also failed: %s", e)
-            raise NoLLMAvailable(f"Gemini and Groq both failed: {e}") from e
+    if provider in ("auto", "groq"):
+        groq = _groq_structured()
+        if groq is not None:
+            try:
+                return groq.invoke(messages), f"groq:{settings.groq_model}"
+            except Exception as e:  # noqa: BLE001
+                log.error("Groq call failed: %s", e)
+                raise NoLLMAvailable(f"Groq failed: {e}") from e
+        elif provider == "groq":
+            raise NoLLMAvailable("GROQ_API_KEY not set.")
 
     raise NoLLMAvailable(
         "No LLM configured. Set GEMINI_API_KEY (https://aistudio.google.com/apikey) "

@@ -92,15 +92,24 @@ class SimilarPRStore:
         log.info("indexed %d PRs (total=%d)", len(rows), self.count())
         return len(rows)
 
-    def query(self, diff_text: str, n_results: int = 5) -> list[SimilarPR]:
+    def query(
+        self, diff_text: str, n_results: int = 5, *, exclude_id: str | None = None
+    ) -> list[SimilarPR]:
         if self.count() == 0:
             return []
-        n = min(n_results, self.count())
+        # over-fetch by 1 so excluding the query PR itself (leave-one-out,
+        # used by the eval harness so a PR never "finds" itself) doesn't
+        # silently shrink the result count.
+        n = min(n_results + (1 if exclude_id else 0), self.count())
         res = self._col.query(query_texts=[diff_text[:_MAX_DIFF_CHARS]], n_results=n)
         out: list[SimilarPR] = []
         for _id, doc, dist, meta in zip(
             res["ids"][0], res["documents"][0], res["distances"][0], res["metadatas"][0]
         ):
+            if exclude_id and _id == exclude_id:
+                continue
+            if len(out) >= n_results:
+                break
             out.append(
                 SimilarPR(
                     pr_id=_id,

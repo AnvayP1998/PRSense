@@ -20,9 +20,12 @@ langchain-google-genai>=2.1   # Gemini, free tier (MIT)
 langchain-groq>=0.2           # Groq fallback, free tier (MIT)
 langsmith>=0.12                # tracing client, free tier (MIT)
 
+# ── Phase 4: evaluation framework ───────────────────────────────────────
+# (dataset storage is JSONL + stdlib sqlite3 — no new dependency needed)
+
 # ── Dev / test ────────────────────────────────────────────────────────
 pytest>=8.3
 pytest-asyncio>=0.24
 
-# ── Phases 4-5 dependencies are added as each phase lands ─────────────
+# ── Phase 5 dependencies are added as that phase lands ─────────────────
 # supabase, streamlit, pandas

@@ -86,11 +86,20 @@ def get_repo_files(
 
 
 def get_similar_prs(
-    diff_text: str, n_results: int = 5, *, store: SimilarPRStore | None = None
+    diff_text: str,
+    n_results: int = 5,
+    *,
+    store: SimilarPRStore | None = None,
+    exclude_pr_id: str | None = None,
 ) -> dict:
-    """RAG lookup: historical PRs most similar to this diff (ChromaDB)."""
+    """RAG lookup: historical PRs most similar to this diff (ChromaDB).
+
+    exclude_pr_id: internal use by the eval harness (leave-one-out so a PR
+    in the indexed dataset never retrieves itself). Not exposed as an MCP
+    tool parameter — the LLM-facing tool never needs it.
+    """
     st = store or get_similar_pr_store()
-    hits = st.query(diff_text, n_results=n_results)
+    hits = st.query(diff_text, n_results=n_results, exclude_id=exclude_pr_id)
     return {
         "count": len(hits),
         "indexed_total": st.count(),

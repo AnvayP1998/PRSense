@@ -52,6 +52,29 @@ Return your review as structured findings per the schema you were given.
 """
 
 
+# --- v2: precision-focused variant for the Phase 4 A/B harness -------------
+# Same task, but explicitly tells the model to suppress nitpicks and
+# already-linted style issues, on the theory that the baseline over-flags
+# stylistic noise and hurts precision/false-positive-rate. Whether that's
+# actually true is exactly what the eval harness measures — this is not
+# assumed, it's tested.
+REVIEW_SYSTEM_PROMPT_V2 = REVIEW_SYSTEM_PROMPT + """
+
+Additional rule for this reviewer version: do NOT report an issue unless you
+would bet money it reflects a real bug, security problem, or performance
+regression. Skip:
+  - anything the repo's linter/formatter (shown below) already enforces,
+  - naming, comment, or docstring nitpicks,
+  - hypothetical edge cases with no evidence in the diff that they occur.
+When in doubt, omit the finding rather than include it.
+"""
+
+PROMPT_VERSIONS = {
+    "v1_baseline": REVIEW_SYSTEM_PROMPT,
+    "v2_precision": REVIEW_SYSTEM_PROMPT_V2,
+}
+
+
 def format_coding_standards(sources: list[dict]) -> str:
     if not sources:
         return "(none found in repo)"

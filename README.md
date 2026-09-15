@@ -4,7 +4,7 @@ AI-powered GitHub PR review bot. 100% free stack: Gemini/Groq LLMs, LangChain +
 LangGraph, MCP tools, ChromaDB RAG, FastAPI, Streamlit. Built around a rigorous
 evaluation framework that proves each iteration's improvement with metrics.
 
-> Status: **Phase 3 (LangGraph review agent) complete.**
+> Status: **Phase 4 (evaluation framework) built — dataset scrape pending a GitHub token.**
 
 ## Stack (all genuinely free)
 
@@ -39,16 +39,24 @@ prsense/
 │   │   ├── tools.py            # get_pr_diff / get_repo_files / get_similar_prs /
 │   │   │                       #   get_repo_coding_standards  (plain, testable fns)
 │   │   └── server.py           # FastMCP server (stdio) wrapping those tools
-│   └── agents/
-│       ├── mcp_bridge.py       # loads MCP tools as LangChain tools for LangGraph
-│       ├── schema.py           # Finding / ReviewResult (structured LLM output)
-│       ├── prompts.py          # review system/human prompt templates
-│       ├── llm.py              # Gemini primary, Groq fallback
-│       └── graph.py            # the 5-node LangGraph review pipeline
+│   ├── agents/
+│   │   ├── mcp_bridge.py       # loads MCP tools as LangChain tools for LangGraph
+│   │   ├── schema.py           # Finding / ReviewResult (structured LLM output)
+│   │   ├── prompts.py          # review prompts (v1 baseline + v2 precision-focused)
+│   │   ├── llm.py              # Gemini primary, Groq fallback, provider override
+│   │   └── graph.py            # the 5-node LangGraph review pipeline
+│   ├── evals/
+│   │   ├── labeling.py         # per-repo revert/regression/security detection (GitHub Search API)
+│   │   ├── dataset_builder.py  # scrape + label historical PRs -> data/dataset.jsonl
+│   │   ├── metrics.py          # precision/recall/F1/FPR + latency percentiles (pure fns)
+│   │   ├── framework.py        # offline eval runner, caching, A/B comparison
+│   │   └── regression_suite.py # curates the fixed must-catch/must-not-flag case set
+│   └── db/client.py            # SQLite eval-run history (git commit + timestamp per run)
 ├── scripts/
 │   ├── phase2_demo.py          # seed / query / mcp  — hands-on, no keys
 │   └── phase3_demo.py          # run the full agent on a real PR — needs 1 LLM key
-└── tests/                      # 16 tests (webhook, MCP tools+server, agent graph — all mocked)
+├── .github/workflows/ci.yml    # unit tests always; regression suite if a key secret exists
+└── tests/                      # 29 tests (webhook, MCP, agent graph, eval metrics/framework/db — all mocked)
 ```
 
 ### MCP tools exposed to the LLM
@@ -106,6 +114,77 @@ Without any key, `scripts/phase3_demo.py` prints the signup links and exits;
 `tests/test_agent_graph.py` covers the graph's logic fully mocked, no key
 needed.
 
+## Phase 4 — evaluation framework
+
+Needs `GITHUB_TOKEN` in `.env` (dataset scraping) and at least one LLM key
+(eval runs). **This is the part of the project meant to be defensible, not
+decorative** — every number below comes from a real run against real merged
+PRs, not a hand-picked example.
+
+### 1. Build the labeled dataset
+
+```bash
+.venv\Scripts\python -m app.evals.dataset_builder build --per-repo 50   # ~150 PRs total
+.venv\Scripts\python -m app.evals.dataset_builder stats
+```
+
+Labels (`had_bug`, `had_security_issue`, `clean_merge`, `reverted`) are
+derived from auditable public signals, not guessed — see
+[`app/evals/labeling.py`](app/evals/labeling.py) docstring for the exact
+rules. This is a **high-precision, low-recall** scheme: it will under-count
+bugs that were fixed without referencing the original PR number. To measure
+how good the auto-labeling actually is:
+
+```bash
+.venv\Scripts\python -m app.evals.dataset_builder audit --n 30   # -> data/label_audit.csv
+# fill in the human_label column by hand, then:
+.venv\Scripts\python -m app.evals.dataset_builder audit-report   # -> measured labeling precision
+```
+
+### 2. Index the dataset for RAG, then run an eval
+
+```bash
+.venv\Scripts\python -m app.evals.framework index                              # seed ChromaDB
+.venv\Scripts\python -m app.evals.framework run --config v1_baseline --sample 50
+.venv\Scripts\python -m app.evals.framework history
+```
+
+Reports precision / recall / F1 / false-positive-rate (PR-level: does the
+agent flag ≥1 bug/security finding on a PR that's actually labeled buggy?)
+and latency p50/p95/p99. Every LLM call is cached to disk keyed by
+`(config, pr_id, diff)` — re-running the same config again is instant and
+free; only a genuinely new (config, PR) pair spends quota.
+
+### 3. A/B compare configs
+
+```bash
+.venv\Scripts\python -m app.evals.framework compare --configs v1_baseline v2_precision --sample 50
+.venv\Scripts\python -m app.evals.framework compare --configs v1_baseline no_retrieval --sample 50
+```
+
+Built-in configs (`app/evals/framework.py::CONFIGS`): `v1_baseline`,
+`v2_precision` (a stricter prompt that suppresses nitpicks), `no_retrieval`
+(RAG turned off — isolates whether the ChromaDB similar-PR lookup actually
+helps), `groq_only`. Every run is stored in SQLite (`data/prsense.db`) with
+its git commit hash and timestamp, so `history` shows a clear before/after
+trail as the project evolves — that table is what feeds the README's results
+section and the Phase 5 dashboard.
+
+### 4. Regression suite (must-always-pass cases)
+
+```bash
+.venv\Scripts\python -m app.evals.regression_suite select --n-bugs 6 --n-clean 6
+.venv\Scripts\python -m pytest -v -m regression
+```
+
+Picks the highest-confidence bug cases (reverted PRs — the strongest signal)
+and the highest-confidence clean cases (oldest, smallest merged PRs) into a
+fixed `data/regression_cases.json`, then runs the *real* agent against every
+one. Runs in CI (`.github/workflows/ci.yml`) against a `GEMINI_API_KEY`
+repo secret if one is configured; self-skips otherwise rather than failing.
+The everyday `pytest -q` / `pytest -v` run excludes this marker by default
+(see `pytest.ini`) so normal development never burns LLM quota.
+
 ## Setup
 
 ```bash
@@ -160,5 +239,11 @@ Without ngrok you can still replay a captured payload with `curl` (see tests).
 - [x] Phase 1 — Foundation (FastAPI, webhook, GitHub client)
 - [x] Phase 2 — MCP server + 4 tools, ChromaDB RAG, LangChain/LangGraph bridge
 - [x] Phase 3 — LangGraph review state machine + LangSmith tracing
-- [ ] Phase 4 — Evaluation framework (dataset, precision/recall/F1, A/B, regression suite)
+- [x] Phase 4 — Evaluation framework built (dataset builder, metrics, A/B harness, regression suite, CI). **Dataset not yet scraped** — needs `GITHUB_TOKEN`; results table goes here once it's run.
 - [ ] Phase 5 — Streamlit dashboard + deployment
+
+### Eval results (filled in after the first real run)
+
+| Config | n | Precision | Recall | F1 | FPR | p50 latency |
+|---|---|---|---|---|---|---|
+| _pending dataset build_ | – | – | – | – | – | – |
