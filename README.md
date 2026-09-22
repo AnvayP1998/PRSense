@@ -10,7 +10,7 @@ evaluation framework that proves each iteration's improvement with metrics.
 
 | Concern | Choice | Free tier |
 |---|---|---|
-| LLM (primary) | Google Gemini | ~1500 req/day |
+| LLM (primary) | Google Gemini | free, but only 20 req/day on `gemini-3.6-flash` — see limits table below |
 | LLM (fallback) | Groq | generous free tier |
 | Orchestration | LangChain + LangGraph | OSS |
 | Tool protocol | MCP | OSS |
@@ -231,8 +231,8 @@ Without ngrok you can still replay a captured payload with `curl` (see tests).
 |---|---|---|
 | GitHub API | 5000 req/hr authenticated | `github_client.rate_limit_remaining()` |
 | ngrok free | 1 online tunnel, random URL each restart | fine for dev |
-| Gemini free | ~1500 req/day, 15 RPM (flash) | Phase 3 |
-| Groq free | ~14.4k req/day, model-dependent RPM | Phase 3 fallback |
+| Gemini free (`gemini-3.6-flash`) | **20 req/DAY** — verified by hitting it live during Phase 4 evals | Far too small for bulk eval runs; see below |
+| Groq free | ~14.4k req/day, model-dependent RPM | The real workhorse for eval volume — Gemini's 20/day covers little more than spot-checks |
 
 ## Roadmap
 
