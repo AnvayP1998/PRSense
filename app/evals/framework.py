@@ -136,11 +136,16 @@ def run_one(row: dict, config: EvalConfig) -> dict:
             review, model_used, error = {"findings": []}, "none", str(e)
         latency_ms = (time.perf_counter() - t0) * 1000
 
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(
-            json.dumps({"review": review, "model_used": model_used, "latency_ms": latency_ms, "error": error}),
-            encoding="utf-8",
-        )
+        if error is None:
+            # Only cache genuine successful reviews. Caching a failure (LLM
+            # quota exhausted, network error, etc.) would make that failure
+            # permanent — the next run would replay the cache hit forever
+            # instead of retrying once the quota resets or a key is added.
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(
+                json.dumps({"review": review, "model_used": model_used, "latency_ms": latency_ms, "error": error}),
+                encoding="utf-8",
+            )
 
     findings = review.get("findings", [])
     y_pred = any(f["issue_type"] in POSITIVE_ISSUE_TYPES for f in findings)
@@ -171,11 +176,20 @@ def run_eval(
         if i % 25 == 0:
             log.info("%s: %d/%d", config.name, i, len(rows))
 
-    y_true = [bool(r["y_true"]) for r in results]
-    y_pred = [bool(r["y_pred"]) for r in results]
+    failed = [r for r in results if r["error"]]
+    ok = [r for r in results if not r["error"]]
+    if failed:
+        log.warning(
+            "%s: %d/%d calls failed (no LLM reachable) and are EXCLUDED from "
+            "metrics, not scored as negative predictions — effective n = %d",
+            config.name, len(failed), len(results), len(ok),
+        )
+
+    y_true = [bool(r["y_true"]) for r in ok]
+    y_pred = [bool(r["y_pred"]) for r in ok]
     cm = classification_metrics(y_true, y_pred)
-    lat = latency_summary([r["latency_ms"] for r in results if r["latency_ms"]])
-    metrics = {**cm.as_dict(), "latency": lat}
+    lat = latency_summary([r["latency_ms"] for r in ok])
+    metrics = {**cm.as_dict(), "latency": lat, "n_errors": len(failed), "n_effective": len(ok)}
     return metrics, results
 
 
@@ -187,11 +201,14 @@ def store_run(config: EvalConfig, metrics: dict, results: list[dict], dataset_pa
         "config_name": config.name,
         "config_json": json.dumps(asdict(config)),
         "dataset_path": str(dataset_path),
-        "n_samples": len(results),
+        # n_samples is the EFFECTIVE count metrics were computed over — rows
+        # where the LLM was unreachable are excluded, not scored as clean.
+        "n_samples": metrics["n_effective"],
         "precision": metrics["precision"], "recall": metrics["recall"], "f1": metrics["f1"],
         "false_positive_rate": metrics["false_positive_rate"], "accuracy": metrics["accuracy"],
         "latency_p50": metrics["latency"]["p50"], "latency_p95": metrics["latency"]["p95"],
-        "latency_p99": metrics["latency"]["p99"], "notes": notes,
+        "latency_p99": metrics["latency"]["p99"],
+        "notes": (notes + f" [{metrics['n_errors']} calls failed / excluded]" if metrics["n_errors"] else notes),
     }
     result_rows = [
         {"pr_id": r["pr_id"], "y_true": r["y_true"], "y_pred": r["y_pred"],
@@ -251,6 +268,11 @@ def main() -> None:
         run_id = store_run(config, metrics, results, args.dataset)
         print(json.dumps({k: v for k, v in metrics.items() if k != "latency"}, indent=2))
         print(json.dumps(metrics["latency"], indent=2))
+        if metrics["n_errors"]:
+            print(f"\n*** WARNING: {metrics['n_errors']}/{len(results)} calls failed (no LLM "
+                  f"reachable — check quota/keys) and were EXCLUDED above, not scored as "
+                  f"clean. Effective n = {metrics['n_effective']}. Re-run the same command "
+                  f"later (uncached failures retry automatically) to fill them in. ***")
         print(f"stored as eval_runs.id={run_id}")
 
     elif args.cmd == "compare":
