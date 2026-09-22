@@ -30,7 +30,7 @@ from app.mcp import tools
 setup_logging()
 log = get_logger(__name__)
 
-DEFAULT_REPOS = ["pallets/flask", "psf/requests", "tiangolo/fastapi"]
+DEFAULT_REPOS = ["pallets/flask", "psf/requests", "fastapi/fastapi"]  # tiangolo/fastapi moved orgs
 DEFAULT_OUT = Path("data/dataset.jsonl")
 _MAX_DIFF_CHARS = 20000
 
@@ -54,22 +54,60 @@ def _append_row(path: Path, row: dict) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def _candidate_merged_prs(repo_obj, min_age_days: int, limit: int):
-    """Yield merged PRs older than min_age_days, newest-eligible first."""
+_POOL_CAP = 1500  # cheap list-only calls; no diff fetched for the pool
+
+
+def _retry(fn, *, attempts: int = 3, base_delay: float = 3.0):
+    """Retry on transient network errors (DNS blips, connection resets) —
+    seen in practice during the long pagination this module does."""
+    import requests
+
+    last_exc = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_exc = e
+            delay = base_delay * (2 ** i)
+            log.warning("transient network error (%s), retrying in %.0fs [%d/%d]", e, delay, i + 1, attempts)
+            time.sleep(delay)
+    raise last_exc
+
+
+def _eligible_merged_pool(repo_obj, min_age_days: int, pool_cap: int) -> list:
+    """Cheaply list up to pool_cap merged PRs older than min_age_days,
+    spanning the repo's whole history (oldest-first) rather than clustering
+    right at the age cutoff. No diff is fetched here — that only happens for
+    the PRs actually sampled from this pool, in `build()`."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
-    seen = 0
+    pool = []
     for pr in repo_obj.get_pulls(state="closed", sort="created", direction="desc"):
-        if seen >= limit:
-            return
-        if not pr.merged or pr.merged_at is None:
+        if len(pool) >= pool_cap:
+            break
+        # merged_at (present directly in the list payload) implies merged;
+        # checking pr.merged separately would silently trigger a full
+        # per-PR completion request in PyGithub — avoid it.
+        if pr.merged_at is None:
             continue
         merged_at = pr.merged_at
         if merged_at.tzinfo is None:
             merged_at = merged_at.replace(tzinfo=timezone.utc)
         if merged_at > cutoff:
             continue  # too recent — give a regression time to surface
-        yield pr
-        seen += 1
+        pool.append(pr)
+    pool.reverse()  # oldest eligible first
+    return pool
+
+
+def _stride_sample(pool: list, n: int) -> list:
+    """Evenly-spaced sample across the whole pool (oldest to newest), so the
+    dataset spans the repo's full history instead of a narrow recent window
+    that (as observed) rarely overlaps with where GitHub Search's
+    relevance-ranked bug/regression reports actually land."""
+    if len(pool) <= n:
+        return pool
+    step = len(pool) / n
+    return [pool[int(i * step)] for i in range(n)]
 
 
 def build(repos: list[str], per_repo: int, min_age_days: int, out: Path) -> None:
@@ -80,7 +118,9 @@ def build(repos: list[str], per_repo: int, min_age_days: int, out: Path) -> None
             "rate limits make a run of any real size impractical). Add it to .env."
         )
 
-    gh = Github(settings.github_token, per_page=100)
+    from github import Auth
+
+    gh = Github(auth=Auth.Token(settings.github_token), per_page=100)
     existing = _load_existing(out)
     log.info("resuming with %d rows already in %s", len(existing), out)
 
@@ -96,7 +136,31 @@ def build(repos: list[str], per_repo: int, min_age_days: int, out: Path) -> None
             log.info("%s already has %d/%d rows, skipping", repo, already, target)
             continue
 
-        for pr in _candidate_merged_prs(repo_obj, min_age_days, limit=target * 4):
+        pool = _retry(lambda: _eligible_merged_pool(repo_obj, min_age_days, _POOL_CAP))
+        log.info("%s: eligible pool = %d merged PRs (aged >= %dd), sampling %d",
+                  repo, len(pool), min_age_days, target)
+
+        # Stratified sampling: a plain stride sample only touches ~3% of a
+        # 1500-PR pool, so it rarely lands on the (rare) labeled-buggy PRs —
+        # observed in practice as literal 0 positives for 2 of 3 repos.
+        # Instead, take every PR the label index already flagged (capped at
+        # half the target so the set doesn't skew all-positive), then fill
+        # the rest with a stride sample across the remaining pool for
+        # historical diversity among the "clean" examples.
+        flagged, unflagged = [], []
+        for pr in pool:
+            lbl = label_index.label_for(pr.number, pr.title or "")
+            (flagged if (lbl["had_bug"] or lbl["had_security_issue"]) else unflagged).append(pr)
+        log.info("%s: %d/%d pool PRs pre-flagged as buggy/security", repo, len(flagged), len(pool))
+
+        flagged_cap = max(int(target * 0.7), 1)  # leave room for clean diversity even if flagged is large
+        take_flagged = flagged[:flagged_cap]
+        remaining = max(target - len(take_flagged), 0)
+        # oversample 2x on the fill so a few diff-fetch failures don't leave
+        # us short of `target`
+        candidates = take_flagged + _stride_sample(unflagged, min(remaining * 2, len(unflagged)))
+
+        for pr in candidates:
             if new_for_repo + already >= target:
                 break
             pr_id = f"{repo}#{pr.number}"
@@ -104,7 +168,7 @@ def build(repos: list[str], per_repo: int, min_age_days: int, out: Path) -> None
                 continue
 
             try:
-                diff_info = tools.get_pr_diff(pr_id, client=None)
+                diff_info = _retry(lambda: tools.get_pr_diff(pr_id, client=None), attempts=2)
             except Exception as e:  # noqa: BLE001
                 log.warning("skip %s: diff fetch failed: %s", pr_id, e)
                 continue

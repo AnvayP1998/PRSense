@@ -47,6 +47,10 @@ _MAX_PAGES_PER_QUERY = 3      # 3 * 100 = 300 results per query, plenty
 
 _REVERT_TITLE_RE = re.compile(r'^Revert\s+"(.+)"\s*$', re.IGNORECASE)
 _PR_REF_RE = re.compile(r"#(\d+)")
+_MAX_REFS_PER_ITEM = 8  # a real regression/security report cites a couple of
+                        # PRs, not dozens — anything above this is almost
+                        # always a bot-generated changelog/dependency-bump
+                        # body whose #N mentions are noise, not references
 
 BUG_QUERY_TERMS = '"regression" OR "broke" OR "broken by" OR "introduced in" OR "introduced by"'
 SECURITY_QUERY_TERMS = 'CVE OR GHSA OR vulnerability OR "security fix" OR "security issue"'
@@ -57,6 +61,23 @@ def _normalize_title(title: str) -> str:
     t = re.sub(r"[\"'`]", "", t)
     t = re.sub(r"\s+", " ", t)
     return t
+
+
+def _extract_pr_refs(item) -> set[int]:
+    """PR numbers referenced by an item's title/body, with noise filters:
+    skip bot-authored items (dependabot etc. — their changelog bodies are
+    full of coincidental #N-looking text) and skip any item that references
+    an implausibly large number of PRs (a real bug report cites one or two,
+    not dozens — that pattern means we hit a changelog/release-notes page)."""
+    author = getattr(getattr(item, "user", None), "login", "") or ""
+    if author.endswith("[bot]"):
+        return set()
+    text = f"{item.title or ''} {item.body or ''}"
+    refs = set(int(n) for n in _PR_REF_RE.findall(text))
+    refs.discard(item.number)
+    if len(refs) > _MAX_REFS_PER_ITEM:
+        return set()
+    return refs
 
 
 def _throttled_search(gh: Github, query: str):
@@ -122,18 +143,18 @@ def build_repo_label_index(gh: Github, repo: str) -> RepoLabelIndex:
             idx.revert_titles.add(norm)
             idx.revert_reasons[norm] = item.html_url
 
-    # 2) Bug/regression follow-ups referencing a PR number
-    for item in _throttled_search(gh, f"repo:{repo} {BUG_QUERY_TERMS}"):
-        text = f"{item.title or ''} {item.body or ''}"
-        for num in set(int(n) for n in _PR_REF_RE.findall(text)):
-            if num != item.number:
+    # 2) Bug/regression follow-ups referencing a PR number. GitHub's search
+    # API requires an explicit is:issue or is:pull-request qualifier (no OR
+    # between qualifiers), so run both and merge.
+    for kind in ("is:issue", "is:pull-request"):
+        for item in _throttled_search(gh, f"repo:{repo} {kind} {BUG_QUERY_TERMS}"):
+            for num in _extract_pr_refs(item):
                 idx.bug_refs[num].append(item.html_url)
 
     # 3) Security follow-ups referencing a PR number
-    for item in _throttled_search(gh, f"repo:{repo} {SECURITY_QUERY_TERMS}"):
-        text = f"{item.title or ''} {item.body or ''}"
-        for num in set(int(n) for n in _PR_REF_RE.findall(text)):
-            if num != item.number:
+    for kind in ("is:issue", "is:pull-request"):
+        for item in _throttled_search(gh, f"repo:{repo} {kind} {SECURITY_QUERY_TERMS}"):
+            for num in _extract_pr_refs(item):
                 idx.security_refs[num].append(item.html_url)
 
     log.info(
