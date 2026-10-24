@@ -9,13 +9,15 @@ __pycache__/
 data/*.db
 data/chroma/
 data/prs/
-data/*.jsonl
+data/label_audit.csv
 data/eval_cache/
 !data/.gitkeep
 
-# data/eval_runs/*.md (comparison snapshots) and data/regression_cases.json
-# ARE tracked on purpose -- they're the before/after eval history and the
-# CI regression fixture, not regenerable noise.
+# data/dataset.jsonl (the 150-PR labeled dataset), data/eval_runs/*.md
+# (comparison snapshots) and data/regression_cases.json ARE tracked on
+# purpose -- they're what makes Phase 4's results reproducible from a
+# fresh clone (no GITHUB_TOKEN needed) and what a deployed instance seeds
+# ChromaDB from (see DEPLOY.md).
 
 # OS
 .DS_Store
