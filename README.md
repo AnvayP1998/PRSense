@@ -232,47 +232,54 @@ above but pinned to Groq — see the quota note below for why). Every run is
 stored in SQLite (`data/prsense.db`) with its git commit hash and timestamp,
 so `history` shows a clear before/after trail as the project evolves.
 
-#### Results so far (2026-10-23/24, commit `fcf0d09`+, 150-PR dataset, `n` = effective sample after excluding quota failures)
+#### Results so far (2026-10-23/24, commit `de9d242`+, 150-PR dataset, `n` = effective sample after excluding quota failures)
 
 | config | n | precision | recall | F1 | FPR | p50 latency |
 |---|---|---|---|---|---|---|
-| `groq_only` (v1 prompt) | 48/50 | 0.20 | 0.29 | 0.24 | 0.20 | 12.0s |
-| `v2_precision_groq` | 27/50 | 0.25 | 0.50 | 0.33 | 0.26 | 9.0s |
-| `no_retrieval_groq` | 14/50 | 0.25 | 0.33 | 0.29 | 0.27 | 2.0s |
+| **`v1_baseline`** (auto: Gemini→Groq, production default) | **49/50** | **0.45** | **0.63** | **0.53** | **0.15** | 18.3s |
+| `v2_precision` (auto) | 14/50 | 0.50 | 0.67 | 0.57 | 0.18 | 11.8s |
+| `groq_only` (v1 prompt, Groq forced) | 48/50 | 0.20 | 0.29 | 0.24 | 0.20 | 12.0s |
+| `v2_precision_groq` (Groq forced) | 27/50 | 0.25 | 0.50 | 0.33 | 0.26 | 9.0s |
+| `no_retrieval_groq` (Groq forced, RAG off) | 14/50 | 0.25 | 0.33 | 0.29 | 0.27 | 2.0s |
 
 **Read this honestly, not optimistically:**
-- These three configs did **not** all attempt the same subset of the
-  50-PR sample successfully — each hit Groq's daily token cap at a
-  different point, so the effective rows differ per config. Directionally
-  informative, not a tightly matched A/B yet.
-- `v2_precision`'s higher F1 (0.33 vs 0.24) and recall (0.50 vs 0.29) are a
-  real, encouraging signal for the "suppress nitpicks" hypothesis, but FPR
-  also rose slightly (0.26 vs 0.20) and n=27 is too small to call this
-  settled — needs a full, unexhausted run to confirm.
-- `no_retrieval_groq` (RAG turned off) is up to **n=14** (resumed across
-  two days as Groq's daily quota allowed — this is exactly the "cache
-  carries progress forward for free" design working as intended), still
-  nowhere near enough to conclude anything about whether retrieval helps.
-  Its much lower p50 latency
-  (2.5s vs 9-12s) is real, though — no RAG lookup, no diff truncation to
-  send, fewer tokens, faster response.
-- `v1_baseline`/`v2_precision` (the `provider="auto"` configs, Gemini-first)
-  haven't been run to completion either: Gemini's real free tier turned out
-  to be **20 requests/day** on `gemini-3.6-flash` (not ~1500/day as older
-  flash models offered — found out the hard way mid-Phase-4), so a 50-sample
-  run exhausts it in minutes and spends the rest of the run retrying with
-  backoff before falling back to Groq. The Groq-pinned configs exist to get
-  clean numbers without that overhead.
+- **`v1_baseline` is the one number here worth actually trusting**: n=49/50
+  (only 1 call failed), run with the real production code path
+  (`provider="auto"`, Gemini-primary/Groq-fallback). Precision 0.45,
+  recall 0.63, F1 0.53 — meaningfully better than every Groq-forced
+  variant above, which suggests Gemini is doing real work when it's
+  available, not just acting as an occasional tie-breaker.
+- The other four rows are genuinely partial (14-48 of 50) for the reasons
+  below, and none of them share the same successful subset of the 50-PR
+  sample (different calls failed in each run), so **cross-row comparisons
+  are directional signal, not a tightly matched A/B** — real differences,
+  just not statistically tight ones yet.
+- `v2_precision` scoring better than `v1_baseline` on every metric it has
+  data for (both as `auto`, and as the Groq-forced pair) is a *consistent*
+  signal across two separate comparisons now — encouraging for the
+  "suppress nitpicks" hypothesis — but its largest sample is still only
+  n=27. Worth a full run once quota allows to see if it holds.
+- `no_retrieval_groq` (RAG turned off) is still too thin (n=14) to say
+  anything about whether retrieval actually helps. Its much lower p50
+  latency (2.0s vs 9-18s elsewhere) is real, though — no RAG lookup, fewer
+  tokens, faster response, independent of whether it reviews better.
+- **Why these are partial**: Gemini's real free tier is **20 requests/day**
+  on `gemini-3.6-flash` (not ~1500/day like older flash models — found out
+  by hitting it live), and Groq's `openai/gpt-oss-120b` caps at **~200,000
+  tokens/day**. A `review_with_fallback()` circuit breaker (added after
+  watching it waste ~30s/call retrying an already-exhausted Gemini) now
+  skips straight to Groq once Gemini's daily quota is detected as spent,
+  which is what let `v1_baseline` finish in minutes instead of timing out
+  repeatedly like earlier attempts.
 
 **Practical free-tier ceiling for this project**: roughly 20 Gemini calls/day
 + ~65-130 Groq calls/day (200k TPD ÷ ~1.5-3k tokens/review) ≈ **100-150 total
 LLM-backed reviews per day across both providers, for free.** A full 150-PR
-eval of one config alone can eat most of a day's Groq budget. Running three
-configs back-to-back (as in `compare`) will usually exhaust it before
-finishing the last one — space `compare` runs across days, or use smaller
-`--sample` sizes, until a multi-day accumulation fills in the gaps (every
-call result is cached, so re-running the same config later only pays for
-whatever didn't succeed yet).
+eval of one config alone can eat most of a day's Groq budget. Running
+several configs back-to-back (as in `compare`, or one `run` after another)
+will usually exhaust it before the last one finishes — every call result is
+cached, so re-running the same command on a later day only pays for whatever
+didn't succeed yet, which is how this table filled in across multiple days.
 
 ### 4. Regression suite (must-always-pass cases)
 
@@ -362,7 +369,7 @@ Without ngrok you can still replay a captured payload with `curl` (see tests).
 - [x] Phase 1 — Foundation (FastAPI, webhook, GitHub client)
 - [x] Phase 2 — MCP server + 4 tools, ChromaDB RAG, LangChain/LangGraph bridge
 - [x] Phase 3 — LangGraph review state machine + LangSmith tracing
-- [x] Phase 4 — Evaluation framework built and run: 150-PR dataset scraped (flask/requests/fastapi), preliminary A/B results above. **Ongoing**: filling in `no_retrieval` and the Gemini-primary configs as daily free-tier quota allows (see the quota note above) — every run is cached, so this costs nothing extra, just time.
+- [x] Phase 4 — Evaluation framework built and run: 150-PR dataset scraped (flask/requests/fastapi). `v1_baseline` (the real production config) run to near-completion (n=49/50): P=0.45 R=0.63 F1=0.53. **Ongoing**: `v2_precision`, `no_retrieval` still partial (n=14) — filling in as daily free-tier quota allows; every run is cached, so this costs nothing extra, just time.
 - [x] Phase 5 — Streamlit dashboard (`dashboard/streamlit_app.py`) + deployment docs (`DEPLOY.md`). **Not yet actually deployed** — see `DEPLOY.md` for why that's a deliberate "when you're ready" step, not a blocker.
 
 ### Eval results (filled in after the first real run)
