@@ -2,16 +2,75 @@
 
 AI-powered GitHub PR review bot. 100% free stack: Gemini/Groq LLMs, LangChain +
 LangGraph, MCP tools, ChromaDB RAG, FastAPI, Streamlit. Built around a rigorous
-evaluation framework that proves each iteration's improvement with metrics.
+evaluation framework that proves each iteration's improvement with metrics —
+not vibes.
 
-> Status: **Phase 4 (evaluation framework) built — dataset scrape pending a GitHub token.**
+> Status: **Phases 1-5 built.** Eval numbers are real but partial (see the
+> Phase 4 results table — free-tier LLM quotas are the actual bottleneck, not
+> the engineering). Not yet deployed to a live repo — see `DEPLOY.md`.
+
+## The problem
+
+PR review bots are easy to build and easy to make useless: either they
+re-paste the whole diff into one giant prompt and call it a day (expensive,
+unfocused, no way to tell if it's actually helping), or they ship with zero
+way to measure whether their output is any good before — and after — you
+change the prompt. This project does neither:
+
+- **Tool-calling, not one giant prompt.** The LLM reaches for the diff, repo
+  standards, and similar historical PRs as MCP tools, the same way a human
+  reviewer would pull up context instead of reading one wall of text.
+- **An actual evaluation harness**, not a demo video. 150 real historical
+  PRs across 3 open-source repos, weak-labeled from auditable public
+  signals (reverts, regression reports — see `app/evals/labeling.py`),
+  scored for precision/recall/F1/false-positive-rate, with an A/B harness
+  to test whether a prompt change actually helps before trusting it.
+- **100% free**, which turned out to be the real constraint worth
+  documenting honestly: Gemini's actual free tier is 20 requests/day on the
+  current flash model, Groq's is ~200k tokens/day — found out by hitting
+  both live mid-build, not by reading marketing copy. The results table
+  below is partial *because of that*, and says so.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    GH[GitHub PR event] -->|webhook, HMAC-verified| API[FastAPI /webhook/github]
+    API -->|background task| Graph
+
+    subgraph Graph["LangGraph review pipeline"]
+        direction LR
+        A[fetch_context] --> B[retrieve_similar_prs] --> C[review] --> D[format_comment] --> E[post_comment]
+    end
+
+    C -->|structured output| LLM{Gemini primary<br/>Groq fallback}
+    B -->|RAG query| Chroma[(ChromaDB<br/>150 labeled PRs)]
+    A -->|diff + standards| MCPTools[MCP tools:<br/>get_pr_diff, get_repo_files,<br/>get_similar_prs, get_repo_coding_standards]
+    E -->|dry_run=false only| GHApi[GitHub: post comment]
+
+    Graph -->|every run| DB[(SQLite: reviews +<br/>eval_runs history)]
+    DB --> Dash[Streamlit dashboard]
+
+    subgraph Eval["Phase 4: offline, not live traffic"]
+        direction LR
+        Scrape[dataset_builder.py<br/>scrape + weak-label] --> Dataset[(data/dataset.jsonl<br/>150 PRs)]
+        Dataset --> Harness[framework.py<br/>run / compare]
+        Harness --> DB
+    end
+```
+
+MCP tools are backed by one shared implementation
+(`app/mcp/tools.py`) — the live graph calls them directly (no subprocess
+per review, keeps latency honest for the eval harness), while
+`app/mcp/server.py` exposes the exact same tools over stdio for any
+external MCP client (Claude Desktop, another agent) to use.
 
 ## Stack (all genuinely free)
 
 | Concern | Choice | Free tier |
 |---|---|---|
 | LLM (primary) | Google Gemini | free, but only 20 req/day on `gemini-3.6-flash` — see limits table below |
-| LLM (fallback) | Groq | generous free tier |
+| LLM (fallback) | Groq | free, but `openai/gpt-oss-120b`'s real cap is ~200k tokens/day — also found by hitting it live |
 | Orchestration | LangChain + LangGraph | OSS |
 | Tool protocol | MCP | OSS |
 | Vector store | ChromaDB (local) | OSS |
@@ -19,7 +78,7 @@ evaluation framework that proves each iteration's improvement with metrics.
 | Tracing/evals | LangSmith | free tier |
 | API | FastAPI | OSS |
 | Dashboard | Streamlit | OSS |
-| Hosting | Railway / Render free tier | free |
+| Hosting | Render (or Railway) free tier | free, but disk is ephemeral — see `DEPLOY.md` |
 
 ## What's here
 
@@ -51,12 +110,15 @@ prsense/
 │   │   ├── metrics.py          # precision/recall/F1/FPR + latency percentiles (pure fns)
 │   │   ├── framework.py        # offline eval runner, caching, A/B comparison
 │   │   └── regression_suite.py # curates the fixed must-catch/must-not-flag case set
-│   └── db/client.py            # SQLite eval-run history (git commit + timestamp per run)
+│   └── db/client.py            # SQLite: eval-run history + the live "reviews" feed
+├── dashboard/streamlit_app.py  # KPIs, eval trends, latency, recent-reviews feed
 ├── scripts/
 │   ├── phase2_demo.py          # seed / query / mcp  — hands-on, no keys
 │   └── phase3_demo.py          # run the full agent on a real PR — needs 1 LLM key
+├── data/dataset.jsonl          # the 150-PR labeled dataset (tracked -- see Phase 4)
+├── DEPLOY.md                   # Render/Railway free-tier deployment, incl. the disk caveat
 ├── .github/workflows/ci.yml    # unit tests always; regression suite if a key secret exists
-└── tests/                      # 29 tests (webhook, MCP, agent graph, eval metrics/framework/db — all mocked)
+└── tests/                      # 31 tests (webhook, MCP, agent graph, eval metrics/framework/db, dashboard — all mocked)
 ```
 
 ### MCP tools exposed to the LLM
@@ -226,6 +288,25 @@ repo secret if one is configured; self-skips otherwise rather than failing.
 The everyday `pytest -q` / `pytest -v` run excludes this marker by default
 (see `pytest.ini`) so normal development never burns LLM quota.
 
+## Phase 5 — dashboard
+
+```bash
+.venv\Scripts\python -m streamlit run dashboard\streamlit_app.py
+```
+
+Opens at http://localhost:8501. Reads `data/prsense.db` directly — four KPI
+tiles (PRs reviewed, findings surfaced, comments posted), a latest-score
+table per eval config, precision/recall/F1/FPR trend lines, p50/p95/p99
+latency bars, and a recent-reviews feed. Every section shows an honest empty
+state (not a fabricated chart) when there's nothing to show yet — e.g. the
+reviews feed is empty until the webhook or `scripts/phase3_demo.py` actually
+runs the agent at least once. Verified with `streamlit.testing.v1.AppTest`
+(`tests/test_dashboard.py`) against both an empty and a populated db, so this
+is covered by the normal `pytest -q` run too.
+
+Deployment (Render/Railway free tier, including the one real caveat — ephemeral
+disk on both platforms' free services): see **`DEPLOY.md`**.
+
 ## Setup
 
 ```bash
@@ -280,8 +361,8 @@ Without ngrok you can still replay a captured payload with `curl` (see tests).
 - [x] Phase 1 — Foundation (FastAPI, webhook, GitHub client)
 - [x] Phase 2 — MCP server + 4 tools, ChromaDB RAG, LangChain/LangGraph bridge
 - [x] Phase 3 — LangGraph review state machine + LangSmith tracing
-- [x] Phase 4 — Evaluation framework built and run: 150-PR dataset scraped (flask/requests/fastapi), preliminary A/B results above. **In progress**: filling in `no_retrieval` and the Gemini-primary configs as daily free-tier quota allows (see the quota note above).
-- [ ] Phase 5 — Streamlit dashboard + deployment
+- [x] Phase 4 — Evaluation framework built and run: 150-PR dataset scraped (flask/requests/fastapi), preliminary A/B results above. **Ongoing**: filling in `no_retrieval` and the Gemini-primary configs as daily free-tier quota allows (see the quota note above) — every run is cached, so this costs nothing extra, just time.
+- [x] Phase 5 — Streamlit dashboard (`dashboard/streamlit_app.py`) + deployment docs (`DEPLOY.md`). **Not yet actually deployed** — see `DEPLOY.md` for why that's a deliberate "when you're ready" step, not a blocker.
 
 ### Eval results (filled in after the first real run)
 
