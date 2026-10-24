@@ -238,7 +238,7 @@ so `history` shows a clear before/after trail as the project evolves.
 |---|---|---|---|---|---|---|
 | `groq_only` (v1 prompt) | 48/50 | 0.20 | 0.29 | 0.24 | 0.20 | 12.0s |
 | `v2_precision_groq` | 27/50 | 0.25 | 0.50 | 0.33 | 0.26 | 9.0s |
-| `no_retrieval_groq` | 10/50 | 0.25 | 0.50 | 0.33 | 0.38 | 2.5s |
+| `no_retrieval_groq` | 14/50 | 0.25 | 0.33 | 0.29 | 0.27 | 2.0s |
 
 **Read this honestly, not optimistically:**
 - These three configs did **not** all attempt the same subset of the
@@ -249,10 +249,11 @@ so `history` shows a clear before/after trail as the project evolves.
   real, encouraging signal for the "suppress nitpicks" hypothesis, but FPR
   also rose slightly (0.26 vs 0.20) and n=27 is too small to call this
   settled — needs a full, unexhausted run to confirm.
-- `no_retrieval_groq` (RAG turned off) only got **n=10** — nowhere near
-  enough to conclude anything about whether retrieval helps. It happened
-  to land on the same F1 as `v2_precision_groq` by coincidence at this
-  sample size; don't read anything into that. Its much lower p50 latency
+- `no_retrieval_groq` (RAG turned off) is up to **n=14** (resumed across
+  two days as Groq's daily quota allowed — this is exactly the "cache
+  carries progress forward for free" design working as intended), still
+  nowhere near enough to conclude anything about whether retrieval helps.
+  Its much lower p50 latency
   (2.5s vs 9-12s) is real, though — no RAG lookup, no diff truncation to
   send, fewer tokens, faster response.
 - `v1_baseline`/`v2_precision` (the `provider="auto"` configs, Gemini-first)
