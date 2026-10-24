@@ -170,27 +170,29 @@ above but pinned to Groq — see the quota note below for why). Every run is
 stored in SQLite (`data/prsense.db`) with its git commit hash and timestamp,
 so `history` shows a clear before/after trail as the project evolves.
 
-#### Results so far (2026-10-23, commit `fcf0d09`+, 150-PR dataset, `n` = effective sample after excluding quota failures)
+#### Results so far (2026-10-23/24, commit `fcf0d09`+, 150-PR dataset, `n` = effective sample after excluding quota failures)
 
 | config | n | precision | recall | F1 | FPR | p50 latency |
 |---|---|---|---|---|---|---|
 | `groq_only` (v1 prompt) | 48/50 | 0.20 | 0.29 | 0.24 | 0.20 | 12.0s |
 | `v2_precision_groq` | 27/50 | 0.25 | 0.50 | 0.33 | 0.26 | 9.0s |
+| `no_retrieval_groq` | 10/50 | 0.25 | 0.50 | 0.33 | 0.38 | 2.5s |
 
 **Read this honestly, not optimistically:**
-- Both configs attempted the *same* 50-PR sample (seeded), but a different
-  subset failed in each (Groq's free-tier daily token cap was hit mid-run —
-  see below), so the two `n`s aren't the same 48/27 PRs. Directionally
+- These three configs did **not** all attempt the same subset of the
+  50-PR sample successfully — each hit Groq's daily token cap at a
+  different point, so the effective rows differ per config. Directionally
   informative, not a tightly matched A/B yet.
 - `v2_precision`'s higher F1 (0.33 vs 0.24) and recall (0.50 vs 0.29) are a
   real, encouraging signal for the "suppress nitpicks" hypothesis, but FPR
   also rose slightly (0.26 vs 0.20) and n=27 is too small to call this
   settled — needs a full, unexhausted run to confirm.
-- `no_retrieval_groq` has **no result yet**: it ran third in the same
-  session and Groq's `gpt-oss-120b` free tier (200,000 tokens/day) was
-  already spent by the first two configs. All 50 calls failed and — per
-  the guard added after this was first discovered — the run was correctly
-  **not** stored as a fake all-zero result.
+- `no_retrieval_groq` (RAG turned off) only got **n=10** — nowhere near
+  enough to conclude anything about whether retrieval helps. It happened
+  to land on the same F1 as `v2_precision_groq` by coincidence at this
+  sample size; don't read anything into that. Its much lower p50 latency
+  (2.5s vs 9-12s) is real, though — no RAG lookup, no diff truncation to
+  send, fewer tokens, faster response.
 - `v1_baseline`/`v2_precision` (the `provider="auto"` configs, Gemini-first)
   haven't been run to completion either: Gemini's real free tier turned out
   to be **20 requests/day** on `gemini-3.6-flash` (not ~1500/day as older
