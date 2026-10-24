@@ -277,7 +277,6 @@ def main() -> None:
     elif args.cmd == "run":
         config = CONFIGS[args.config]
         metrics, results = run_eval(config, args.dataset, args.sample)
-        run_id = store_run(config, metrics, results, args.dataset)
         print(json.dumps({k: v for k, v in metrics.items() if k != "latency"}, indent=2))
         print(json.dumps(metrics["latency"], indent=2))
         if metrics["n_errors"]:
@@ -285,13 +284,21 @@ def main() -> None:
                   f"reachable — check quota/keys) and were EXCLUDED above, not scored as "
                   f"clean. Effective n = {metrics['n_effective']}. Re-run the same command "
                   f"later (uncached failures retry automatically) to fill them in. ***")
-        print(f"stored as eval_runs.id={run_id}")
+        if metrics["n_effective"] == 0:
+            print("\n*** every call failed -- NOT storing this run (would be a meaningless "
+                  "all-zero row in eval_runs history). Fix the underlying issue and re-run. ***")
+        else:
+            run_id = store_run(config, metrics, results, args.dataset)
+            print(f"stored as eval_runs.id={run_id}")
 
     elif args.cmd == "compare":
         table_rows = []
         for name in args.configs:
             config = CONFIGS[name]
             metrics, results = run_eval(config, args.dataset, args.sample)
+            if metrics["n_effective"] == 0:
+                print(f"*** {name}: every call failed -- skipping (not stored, not in table) ***")
+                continue
             store_run(config, metrics, results, args.dataset, notes="compare run")
             table_rows.append({"config": name, "n": len(results), **metrics})
         table = print_comparison_table(table_rows)
