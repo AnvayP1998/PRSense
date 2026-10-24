@@ -66,6 +66,12 @@ CONFIGS: dict[str, EvalConfig] = {
     "v2_precision": EvalConfig("v2_precision", prompt_version="v2_precision"),
     "no_retrieval": EvalConfig("no_retrieval", use_retrieval=False),
     "groq_only": EvalConfig("groq_only", provider="groq"),
+    # Groq-pinned variants of the above -- Gemini's real free tier (20
+    # req/day, discovered running this harness live) is exhausted in minutes,
+    # so "auto" configs waste a retry-with-backoff per call once it's gone
+    # for the day. These give clean same-model A/B comparisons regardless.
+    "v2_precision_groq": EvalConfig("v2_precision_groq", prompt_version="v2_precision", provider="groq"),
+    "no_retrieval_groq": EvalConfig("no_retrieval_groq", use_retrieval=False, provider="groq"),
 }
 
 
