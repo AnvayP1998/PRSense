@@ -165,10 +165,49 @@ free; only a genuinely new (config, PR) pair spends quota.
 Built-in configs (`app/evals/framework.py::CONFIGS`): `v1_baseline`,
 `v2_precision` (a stricter prompt that suppresses nitpicks), `no_retrieval`
 (RAG turned off — isolates whether the ChromaDB similar-PR lookup actually
-helps), `groq_only`. Every run is stored in SQLite (`data/prsense.db`) with
-its git commit hash and timestamp, so `history` shows a clear before/after
-trail as the project evolves — that table is what feeds the README's results
-section and the Phase 5 dashboard.
+helps), `groq_only`, plus `v2_precision_groq`/`no_retrieval_groq` (same as
+above but pinned to Groq — see the quota note below for why). Every run is
+stored in SQLite (`data/prsense.db`) with its git commit hash and timestamp,
+so `history` shows a clear before/after trail as the project evolves.
+
+#### Results so far (2026-10-23, commit `fcf0d09`+, 150-PR dataset, `n` = effective sample after excluding quota failures)
+
+| config | n | precision | recall | F1 | FPR | p50 latency |
+|---|---|---|---|---|---|---|
+| `groq_only` (v1 prompt) | 48/50 | 0.20 | 0.29 | 0.24 | 0.20 | 12.0s |
+| `v2_precision_groq` | 27/50 | 0.25 | 0.50 | 0.33 | 0.26 | 9.0s |
+
+**Read this honestly, not optimistically:**
+- Both configs attempted the *same* 50-PR sample (seeded), but a different
+  subset failed in each (Groq's free-tier daily token cap was hit mid-run —
+  see below), so the two `n`s aren't the same 48/27 PRs. Directionally
+  informative, not a tightly matched A/B yet.
+- `v2_precision`'s higher F1 (0.33 vs 0.24) and recall (0.50 vs 0.29) are a
+  real, encouraging signal for the "suppress nitpicks" hypothesis, but FPR
+  also rose slightly (0.26 vs 0.20) and n=27 is too small to call this
+  settled — needs a full, unexhausted run to confirm.
+- `no_retrieval_groq` has **no result yet**: it ran third in the same
+  session and Groq's `gpt-oss-120b` free tier (200,000 tokens/day) was
+  already spent by the first two configs. All 50 calls failed and — per
+  the guard added after this was first discovered — the run was correctly
+  **not** stored as a fake all-zero result.
+- `v1_baseline`/`v2_precision` (the `provider="auto"` configs, Gemini-first)
+  haven't been run to completion either: Gemini's real free tier turned out
+  to be **20 requests/day** on `gemini-3.6-flash` (not ~1500/day as older
+  flash models offered — found out the hard way mid-Phase-4), so a 50-sample
+  run exhausts it in minutes and spends the rest of the run retrying with
+  backoff before falling back to Groq. The Groq-pinned configs exist to get
+  clean numbers without that overhead.
+
+**Practical free-tier ceiling for this project**: roughly 20 Gemini calls/day
++ ~65-130 Groq calls/day (200k TPD ÷ ~1.5-3k tokens/review) ≈ **100-150 total
+LLM-backed reviews per day across both providers, for free.** A full 150-PR
+eval of one config alone can eat most of a day's Groq budget. Running three
+configs back-to-back (as in `compare`) will usually exhaust it before
+finishing the last one — space `compare` runs across days, or use smaller
+`--sample` sizes, until a multi-day accumulation fills in the gaps (every
+call result is cached, so re-running the same config later only pays for
+whatever didn't succeed yet).
 
 ### 4. Regression suite (must-always-pass cases)
 
@@ -239,7 +278,7 @@ Without ngrok you can still replay a captured payload with `curl` (see tests).
 - [x] Phase 1 — Foundation (FastAPI, webhook, GitHub client)
 - [x] Phase 2 — MCP server + 4 tools, ChromaDB RAG, LangChain/LangGraph bridge
 - [x] Phase 3 — LangGraph review state machine + LangSmith tracing
-- [x] Phase 4 — Evaluation framework built (dataset builder, metrics, A/B harness, regression suite, CI). **Dataset not yet scraped** — needs `GITHUB_TOKEN`; results table goes here once it's run.
+- [x] Phase 4 — Evaluation framework built and run: 150-PR dataset scraped (flask/requests/fastapi), preliminary A/B results above. **In progress**: filling in `no_retrieval` and the Gemini-primary configs as daily free-tier quota allows (see the quota note above).
 - [ ] Phase 5 — Streamlit dashboard + deployment
 
 ### Eval results (filled in after the first real run)
