@@ -22,10 +22,16 @@ FAKE_SIMILAR = {"count": 0, "indexed_total": 0, "results": []}
 
 
 @pytest.fixture(autouse=True)
-def _mock_tools(monkeypatch):
+def _mock_tools(monkeypatch, tmp_path):
     monkeypatch.setattr(graph_mod.tools, "get_pr_diff", lambda pr_id: FAKE_PR)
     monkeypatch.setattr(graph_mod.tools, "get_repo_coding_standards", lambda repo: FAKE_STANDARDS)
     monkeypatch.setattr(graph_mod.tools, "get_similar_prs", lambda diff, n_results=5: FAKE_SIMILAR)
+    # run_review() logs to the dashboard's reviews table -- point it at a
+    # throwaway db so tests never write into the real data/prsense.db.
+    from app.db.client import EvalDB
+    import app.db.client as db_mod
+    test_db = EvalDB(path=tmp_path / "test.db")
+    monkeypatch.setattr(db_mod, "get_eval_db", lambda: test_db)
 
 
 class FakeGitHubClient:

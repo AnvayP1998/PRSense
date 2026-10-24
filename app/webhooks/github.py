@@ -34,7 +34,7 @@ def _run_review_background(pr_id: str, dry_run: bool) -> None:
     from app.agents.graph import run_review  # deferred: keep webhook import light
 
     try:
-        state = run_review(pr_id, dry_run=dry_run)
+        state = run_review(pr_id, dry_run=dry_run, source="webhook")
         log.info(
             "review complete pr=%s model=%s findings=%d posted=%s",
             pr_id, state.get("model_used"),

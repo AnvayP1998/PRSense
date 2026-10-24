@@ -1,4 +1,6 @@
-"""SQLite storage for eval run history (Phase 4) — before/after tracking.
+"""SQLite storage for eval run history (Phase 4) and the live review feed
+(Phase 5 dashboard) — before/after tracking plus "what has PRSense actually
+reviewed" in one place.
 
 Plain stdlib sqlite3, zero new dependencies. Swappable for Supabase later:
 every write goes through this one class, so the storage backend is an
@@ -38,6 +40,21 @@ CREATE TABLE IF NOT EXISTS eval_results (
     latency_ms REAL,
     model_used TEXT,
     error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reviewed_at TEXT NOT NULL,
+    pr_id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    title TEXT,
+    model_used TEXT,
+    overall_risk TEXT,
+    n_findings INTEGER,
+    dry_run INTEGER NOT NULL,
+    comment_id INTEGER,
+    latency_ms REAL,
+    source TEXT
 );
 """
 
@@ -105,6 +122,37 @@ class EvalDB:
                 "SELECT * FROM eval_results WHERE run_id = ?", (run_id,)
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # -- live review feed (Phase 5 dashboard) ----------------------------
+    def log_review(self, review: dict) -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                """INSERT INTO reviews
+                   (reviewed_at, pr_id, repo, title, model_used, overall_risk,
+                    n_findings, dry_run, comment_id, latency_ms, source)
+                   VALUES (:reviewed_at, :pr_id, :repo, :title, :model_used, :overall_risk,
+                           :n_findings, :dry_run, :comment_id, :latency_ms, :source)""",
+                review,
+            )
+            return cur.lastrowid
+
+    def recent_reviews(self, limit: int = 50) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM reviews ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def review_stats(self) -> dict:
+        with self._conn() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) AS n_reviews,
+                          SUM(CASE WHEN n_findings > 0 THEN 1 ELSE 0 END) AS n_with_findings,
+                          COALESCE(SUM(n_findings), 0) AS total_findings,
+                          SUM(CASE WHEN comment_id IS NOT NULL THEN 1 ELSE 0 END) AS n_posted
+                   FROM reviews"""
+            ).fetchone()
+            return dict(row)
 
 
 def get_eval_db() -> EvalDB:

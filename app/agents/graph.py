@@ -158,10 +158,37 @@ def build_graph():
     return g.compile()
 
 
-def run_review(pr_id: str, *, dry_run: bool = True) -> ReviewState:
+def run_review(pr_id: str, *, dry_run: bool = True, source: str = "manual") -> ReviewState:
+    import time
+    from datetime import datetime, timezone
+
+    from app.db.client import get_eval_db
+
     repo, number = tools.parse_pr_id(pr_id)
     graph = build_graph()
     initial: ReviewState = {
         "pr_id": pr_id, "repo": repo, "number": number, "dry_run": dry_run,
     }
-    return graph.invoke(initial)
+    t0 = time.perf_counter()
+    final_state = graph.invoke(initial)
+    latency_ms = (time.perf_counter() - t0) * 1000
+
+    try:
+        review = final_state.get("review") or {}
+        get_eval_db().log_review({
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            "pr_id": pr_id,
+            "repo": repo,
+            "title": final_state.get("pr", {}).get("title", ""),
+            "model_used": final_state.get("model_used"),
+            "overall_risk": review.get("overall_risk"),
+            "n_findings": len(review.get("findings", [])),
+            "dry_run": int(dry_run),
+            "comment_id": final_state.get("comment_id"),
+            "latency_ms": latency_ms,
+            "source": source,  # "webhook" | "manual" (demo script) | ...
+        })
+    except Exception:  # noqa: BLE001 - logging the feed must never break a real review
+        log.exception("failed to log review for %s to the dashboard feed", pr_id)
+
+    return final_state
