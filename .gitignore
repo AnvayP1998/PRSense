@@ -10,7 +10,12 @@ data/*.db
 data/chroma/
 data/prs/
 data/*.jsonl
+data/eval_cache/
 !data/.gitkeep
+
+# data/eval_runs/*.md (comparison snapshots) and data/regression_cases.json
+# ARE tracked on purpose -- they're the before/after eval history and the
+# CI regression fixture, not regenerable noise.
 
 # OS
 .DS_Store
