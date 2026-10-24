@@ -23,9 +23,12 @@ langsmith>=0.12                # tracing client, free tier (MIT)
 # ── Phase 4: evaluation framework ───────────────────────────────────────
 # (dataset storage is JSONL + stdlib sqlite3 — no new dependency needed)
 
+# ── Phase 5: dashboard ───────────────────────────────────────────────────
+streamlit>=1.66          # dashboard UI, free/OSS (Apache-2.0)
+pandas>=3.1              # dataframes for the dashboard's tables/charts (BSD-3)
+# Supabase swap deferred -- SQLite covers this project's actual scale fine;
+# see app/db/client.py for the one place that would change.
+
 # ── Dev / test ────────────────────────────────────────────────────────
 pytest>=8.3
 pytest-asyncio>=0.24
-
-# ── Phase 5 dependencies are added as that phase lands ─────────────────
-# supabase, streamlit, pandas
