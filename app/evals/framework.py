@@ -117,6 +117,12 @@ def run_one(row: dict, config: EvalConfig) -> dict:
     y_true = bool(row["labels"]["had_bug"] or row["labels"]["had_security_issue"])
     cache_file = _cache_path(config, row)
 
+    # Ignore (and clean up) a stale cache entry written before failed calls
+    # stopped being cached at all -- otherwise a quota exhaustion from a
+    # previous run replays forever instead of retrying.
+    if cache_file.exists() and json.loads(cache_file.read_text(encoding="utf-8")).get("error"):
+        cache_file.unlink()
+
     if cache_file.exists():
         cached = json.loads(cache_file.read_text(encoding="utf-8"))
         review, model_used, latency_ms, error = cached["review"], cached["model_used"], cached["latency_ms"], cached.get("error")
